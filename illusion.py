@@ -1,22 +1,20 @@
-import torch
-from PIL import Image
-from diffusers import (
-    AutoencoderKL,
-    ControlNetModel,
-    EulerDiscreteScheduler
-)
-from pipeline_controlnet import StableDiffusionControlNetPipeline
 import argparse
+
+import torch
+from diffusers import AutoencoderKL, ControlNetModel, EulerDiscreteScheduler
+from PIL import Image
+
+from pipeline_controlnet import StableDiffusionControlNetPipeline
 
 
 # https://huggingface.co/spaces/AP123/IllusionDiffusion/blob/main/app.py
 def center_crop_resize(img, output_size=(512, 512)):
     width, height = img.size
 
-    aspect_orig = width/height;
-    aspect_dest = output_size[0]/output_size[1]
+    aspect_orig = width / height
+    aspect_dest = output_size[0] / output_size[1]
 
-    if(aspect_orig > aspect_dest):
+    if aspect_orig > aspect_dest:
         # input is too wide, scale based on height and trim left/right
         new_height = img.height
         new_width = int(img.height * aspect_dest)
@@ -36,20 +34,24 @@ def center_crop_resize(img, output_size=(512, 512)):
     return img
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--prompt', type=str, default="Medieval village scene with busy streets and castle in the distance")
-    parser.add_argument('--controlnet_img', type=str, default="pano_pattern.png")
-    parser.add_argument('--negative_prompt', type=str, default='low quality')
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="Medieval village scene with busy streets and castle in the distance",
+    )
+    parser.add_argument("--controlnet_img", type=str, default="pano_pattern.png")
+    parser.add_argument("--negative_prompt", type=str, default="low quality")
     # controls the fidelity to the controlnet signal. May have to be adjusted depending on the input
-    parser.add_argument('--controlnet_scale', type=float, default=1.3)
-    parser.add_argument('--guidance_scale', type=float, default=7.5)
-    parser.add_argument('--H', type=int, default=512)
-    parser.add_argument('--W', type=int, default=1536)
-    parser.add_argument('--steps', type=int, default=30)
-    parser.add_argument('--seed', type=int, default=-1)
-    parser.add_argument('--stride', type=int, default=64)
-    parser.add_argument('--outfile', type=str, default='out.png')
+    parser.add_argument("--controlnet_scale", type=float, default=1.3)
+    parser.add_argument("--guidance_scale", type=float, default=7.5)
+    parser.add_argument("--H", type=int, default=512)
+    parser.add_argument("--W", type=int, default=1536)
+    parser.add_argument("--steps", type=int, default=30)
+    parser.add_argument("--seed", type=int, default=-1)
+    parser.add_argument("--stride", type=int, default=64)
+    parser.add_argument("--outfile", type=str, default="out.png")
     opt = parser.parse_args()
 
     h, w = opt.H, opt.W
@@ -58,7 +60,8 @@ if __name__ == '__main__':
 
     vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
     controlnet = ControlNetModel.from_pretrained(
-        "monster-labs/control_v1p_sd15_qrcode_monster")
+        "monster-labs/control_v1p_sd15_qrcode_monster"
+    )
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         "SG161222/Realistic_Vision_V5.1_noVAE",
         controlnet=controlnet,
@@ -80,6 +83,6 @@ if __name__ == '__main__':
         num_inference_steps=opt.steps,
         height=h,
         width=w,
-        stride=opt.stride // 8
+        stride=opt.stride // 8,
     ).images[0]
     out.save(opt.outfile)

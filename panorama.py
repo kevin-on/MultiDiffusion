@@ -1,14 +1,17 @@
+from diffusers import AutoencoderKL, DDIMScheduler, UNet2DConditionModel
 from transformers import CLIPTextModel, CLIPTokenizer, logging
-from diffusers import AutoencoderKL, UNet2DConditionModel, DDIMScheduler
 
 # suppress partial model loading warning
 logging.set_verbosity_error()
 
+import argparse
+import os
+
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
-import argparse
 from tqdm import tqdm
+
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -34,47 +37,64 @@ def get_views(panorama_height, panorama_width, window_size=64, stride=8):
 
 
 class MultiDiffusion(nn.Module):
-    def __init__(self, device, sd_version='2.0', hf_key=None):
+    def __init__(self, device, sd_version="2.0", hf_key=None):
         super().__init__()
 
         self.device = device
         self.sd_version = sd_version
 
-        print(f'[INFO] loading stable diffusion...')
+        print(f"[INFO] loading stable diffusion...")
         if hf_key is not None:
-            print(f'[INFO] using hugging face custom model key: {hf_key}')
+            print(f"[INFO] using hugging face custom model key: {hf_key}")
             model_key = hf_key
-        elif self.sd_version == '2.1':
+        elif self.sd_version == "2.1":
             model_key = "stabilityai/stable-diffusion-2-1-base"
-        elif self.sd_version == '2.0':
+        elif self.sd_version == "2.0":
             model_key = "stabilityai/stable-diffusion-2-base"
-        elif self.sd_version == '1.5':
+        elif self.sd_version == "1.5":
             model_key = "runwayml/stable-diffusion-v1-5"
         else:
-            raise ValueError(f'Stable-diffusion version {self.sd_version} not supported.')
+            raise ValueError(
+                f"Stable-diffusion version {self.sd_version} not supported."
+            )
 
         # Create model
-        self.vae = AutoencoderKL.from_pretrained(model_key, subfolder="vae").to(self.device)
+        self.vae = AutoencoderKL.from_pretrained(model_key, subfolder="vae").to(
+            self.device
+        )
         self.tokenizer = CLIPTokenizer.from_pretrained(model_key, subfolder="tokenizer")
-        self.text_encoder = CLIPTextModel.from_pretrained(model_key, subfolder="text_encoder").to(self.device)
-        self.unet = UNet2DConditionModel.from_pretrained(model_key, subfolder="unet").to(self.device)
+        self.text_encoder = CLIPTextModel.from_pretrained(
+            model_key, subfolder="text_encoder"
+        ).to(self.device)
+        self.unet = UNet2DConditionModel.from_pretrained(
+            model_key, subfolder="unet"
+        ).to(self.device)
 
         self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
 
-        print(f'[INFO] loaded stable diffusion!')
+        print(f"[INFO] loaded stable diffusion!")
 
     @torch.no_grad()
     def get_text_embeds(self, prompt, negative_prompt):
         # prompt, negative_prompt: [str]
 
         # Tokenize text and get embeddings
-        text_input = self.tokenizer(prompt, padding='max_length', max_length=self.tokenizer.model_max_length,
-                                    truncation=True, return_tensors='pt')
+        text_input = self.tokenizer(
+            prompt,
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        )
         text_embeddings = self.text_encoder(text_input.input_ids.to(self.device))[0]
 
         # Do the same for unconditional embeddings
-        uncond_input = self.tokenizer(negative_prompt, padding='max_length', max_length=self.tokenizer.model_max_length,
-                                      return_tensors='pt')
+        uncond_input = self.tokenizer(
+            negative_prompt,
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            return_tensors="pt",
+        )
 
         uncond_embeddings = self.text_encoder(uncond_input.input_ids.to(self.device))[0]
 
@@ -90,8 +110,16 @@ class MultiDiffusion(nn.Module):
         return imgs
 
     @torch.no_grad()
-    def text2panorama(self, prompts, negative_prompts='', height=512, width=2048, num_inference_steps=50,
-                      guidance_scale=7.5):
+    def text2panorama(
+        self,
+        prompts,
+        negative_prompts="",
+        height=512,
+        width=2048,
+        num_inference_steps=50,
+        guidance_scale=7.5,
+        eta=0.0,
+    ):
 
         if isinstance(prompts, str):
             prompts = [prompts]
@@ -103,14 +131,16 @@ class MultiDiffusion(nn.Module):
         text_embeds = self.get_text_embeds(prompts, negative_prompts)  # [2, 77, 768]
 
         # Define panorama grid and get views
-        latent = torch.randn((1, self.unet.in_channels, height // 8, width // 8), device=self.device)
+        latent = torch.randn(
+            (1, self.unet.in_channels, height // 8, width // 8), device=self.device
+        )
         views = get_views(height, width)
         count = torch.zeros_like(latent)
         value = torch.zeros_like(latent)
 
         self.scheduler.set_timesteps(num_inference_steps)
 
-        with torch.autocast('cuda'):
+        with torch.autocast("cuda"):
             for i, t in enumerate(tqdm(self.scheduler.timesteps)):
                 count.zero_()
                 value.zero_()
@@ -123,14 +153,20 @@ class MultiDiffusion(nn.Module):
                     latent_model_input = torch.cat([latent_view] * 2)
 
                     # predict the noise residual
-                    noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeds)['sample']
+                    noise_pred = self.unet(
+                        latent_model_input, t, encoder_hidden_states=text_embeds
+                    )["sample"]
 
                     # perform guidance
                     noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                    noise_pred = noise_pred_uncond + guidance_scale * (
+                        noise_pred_cond - noise_pred_uncond
+                    )
 
                     # compute the denoising step with the reference model
-                    latents_view_denoised = self.scheduler.step(noise_pred, t, latent_view)['prev_sample']
+                    latents_view_denoised = self.scheduler.step(
+                        noise_pred, t, latent_view, eta=eta
+                    )["prev_sample"]
                     value[:, :, h_start:h_end, w_start:w_end] += latents_view_denoised
                     count[:, :, h_start:h_end, w_start:w_end] += 1
 
@@ -143,26 +179,35 @@ class MultiDiffusion(nn.Module):
         return img
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--prompt', type=str, default='a photo of the dolomites')
-    parser.add_argument('--negative', type=str, default='')
-    parser.add_argument('--sd_version', type=str, default='2.0', choices=['1.5', '2.0'],
-                        help="stable diffusion version")
-    parser.add_argument('--H', type=int, default=512)
-    parser.add_argument('--W', type=int, default=4096)
-    parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--steps', type=int, default=50)
-    parser.add_argument('--outfile', type=str, default='out.png')
+    parser.add_argument("--prompt", type=str, default="a photo of the dolomites")
+    parser.add_argument("--negative", type=str, default="")
+    parser.add_argument(
+        "--sd_version",
+        type=str,
+        default="2.0",
+        choices=["1.5", "2.0"],
+        help="stable diffusion version",
+    )
+    parser.add_argument("--H", type=int, default=512)
+    parser.add_argument("--W", type=int, default=4096)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--steps", type=int, default=50)
+    parser.add_argument("-o", "--outfile", type=str, default="out.png")
+    parser.add_argument("--eta", type=float, default=0.0)
     opt = parser.parse_args()
 
     seed_everything(opt.seed)
 
-    device = torch.device('cuda')
+    device = torch.device("cuda")
 
     sd = MultiDiffusion(device, opt.sd_version)
 
-    img = sd.text2panorama(opt.prompt, opt.negative, opt.H, opt.W, opt.steps)
+    img = sd.text2panorama(opt.prompt, opt.negative, opt.H, opt.W, opt.steps, opt.eta)
 
     # save image
+    output_dir = os.path.dirname(opt.outfile)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     img.save(opt.outfile)

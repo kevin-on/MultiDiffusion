@@ -2,24 +2,23 @@
 Adapted from https://huggingface.co/spaces/stabilityai/stable-diffusion
 """
 
-import torch
-
 import time
 
 import gradio as gr
-
-from diffusers import StableDiffusionPanoramaPipeline, DDIMScheduler
+import torch
+from diffusers import DDIMScheduler, StableDiffusionPanoramaPipeline
 
 model_ckpt = "stabilityai/stable-diffusion-2-base"
 scheduler = DDIMScheduler.from_pretrained(model_ckpt, subfolder="scheduler")
 pipe = StableDiffusionPanoramaPipeline.from_pretrained(
-     model_ckpt, scheduler=scheduler, torch_dtype=torch.float16
+    model_ckpt, scheduler=scheduler, torch_dtype=torch.float16
 )
 # pipe = StableDiffusionPanoramaPipeline.from_pretrained(
 #      model_ckpt, scheduler=scheduler
 # )
 
 pipe = pipe.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+
 
 def generate_image_fn(prompt: str, img_width: int, img_height=512) -> list:
     start_time = time.time()
