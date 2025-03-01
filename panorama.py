@@ -142,12 +142,16 @@ class MultiDiffusion(nn.Module):
 
         with torch.autocast("cuda"):
             for i, t in enumerate(tqdm(self.scheduler.timesteps)):
+                variance_noise = torch.randn_like(latent)
                 count.zero_()
                 value.zero_()
 
                 for h_start, h_end, w_start, w_end in views:
                     # TODO we can support batches, and pass multiple views at once to the unet
                     latent_view = latent[:, :, h_start:h_end, w_start:w_end]
+                    variance_noise_view = variance_noise[
+                        :, :, h_start:h_end, w_start:w_end
+                    ]
 
                     # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
                     latent_model_input = torch.cat([latent_view] * 2)
@@ -165,7 +169,11 @@ class MultiDiffusion(nn.Module):
 
                     # compute the denoising step with the reference model
                     latents_view_denoised = self.scheduler.step(
-                        noise_pred, t, latent_view, eta=eta
+                        noise_pred,
+                        t,
+                        latent_view,
+                        eta=eta,
+                        variance_noise=variance_noise_view,
                     )["prev_sample"]
                     value[:, :, h_start:h_end, w_start:w_end] += latents_view_denoised
                     count[:, :, h_start:h_end, w_start:w_end] += 1
@@ -194,8 +202,9 @@ if __name__ == "__main__":
     parser.add_argument("--W", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--steps", type=int, default=50)
-    parser.add_argument("-o", "--outfile", type=str, default="out.png")
+    parser.add_argument("--guidance", type=float, default=7.5)
     parser.add_argument("--eta", type=float, default=0.0)
+    parser.add_argument("-o", "--outfile", type=str, default="out.png")
     opt = parser.parse_args()
 
     seed_everything(opt.seed)
@@ -204,7 +213,9 @@ if __name__ == "__main__":
 
     sd = MultiDiffusion(device, opt.sd_version)
 
-    img = sd.text2panorama(opt.prompt, opt.negative, opt.H, opt.W, opt.steps, opt.eta)
+    img = sd.text2panorama(
+        opt.prompt, opt.negative, opt.H, opt.W, opt.steps, opt.guidance, opt.eta
+    )
 
     # save image
     output_dir = os.path.dirname(opt.outfile)
